@@ -3,6 +3,7 @@
 /**
  * @fileOverview Server-side utility to download a PDF from Sci-Hub for a given DOI.
  * Uses axios for HTTP requests and supports SOCKS proxy.
+ * Attempts to handle direct PDF responses and HTML pages containing download links.
  * Returns the PDF content as a Base64 data URI or an error.
  *
  * - downloadSciHubPdf - A function that handles the download process.
@@ -25,7 +26,7 @@ export type SciHubInput = z.infer<typeof SciHubInputSchema>;
 const SciHubOutputSchema = z.object({
     success: z.boolean(),
     dataUri: z.string().optional().describe("The Base64 encoded data URI of the PDF file (e.g., 'data:application/pdf;base64,...'). Present only on success."),
-    resolvedUrl: z.string().optional().describe("The final URL resolved from Sci-Hub."),
+    resolvedUrl: z.string().optional().describe("The final URL from which the PDF was downloaded or attempted."),
     errorMessage: z.string().optional().describe("Error message if the download failed."),
     contentType: z.string().optional().describe("The content type received from the final download URL."),
 });
@@ -60,16 +61,13 @@ const commonHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Referer': 'https://www.google.com/',
+    'Referer': 'https://www.google.com/', // Adding a common referer
 };
 
 const getAxiosConfig = (responseType: ResponseType = 'text'): AxiosRequestConfig => {
     const agent = getAxiosAgent();
-    return {
+    const config: AxiosRequestConfig = {
         headers: commonHeaders,
-        // Axios needs separate agents for HTTP and HTTPS when using proxies
-        httpsAgent: agent,
-        // httpAgent: agent, // Add if you need proxy for HTTP requests too
         timeout: 90000, // 90 seconds timeout
         maxRedirects: 10, // Follow redirects (axios default is 5)
         responseType: responseType,
@@ -78,10 +76,59 @@ const getAxiosConfig = (responseType: ResponseType = 'text'): AxiosRequestConfig
             return status >= 200 && status < 500; // Accept 2xx, 3xx, 4xx
         },
     };
+    if (agent) {
+       config.httpsAgent = agent;
+       // config.httpAgent = agent; // Uncomment if you need proxy for HTTP too
+    }
+    return config;
 };
 
 /**
+ * Extracts the direct PDF download link from Sci-Hub HTML content.
+ * Looks for patterns like onclick="location.href='//...pdf?download=true'".
+ * @param html The HTML content as a string.
+ * @returns The extracted URL (starting with https://) or null if not found.
+ */
+function extractPdfLinkFromHtml(html: string): string | null {
+    // Regex to find the download link within onclick attribute or similar patterns
+    // It looks for location.href='(//.../(?:pdf|zip))' optionally followed by ?download=true
+    const regex = /location\.href='(\/\/.*?\/[^']+\.(?:pdf|zip))(?:\?download=true)?'/i;
+    const match = html.match(regex);
+
+    if (match && match[1]) {
+        const extractedPath = match[1];
+        console.log(`Found potential download link in HTML: ${extractedPath}`);
+        // Ensure the URL starts with https://
+        return extractedPath.startsWith('//') ? `https:${extractedPath}` : extractedPath;
+    }
+
+    // Fallback: Look for an <a> tag with href containing .pdf inside specific divs
+    const anchorRegex = /<div id=["']?buttons?["']?.*?<a.*?href=["'](.*?\.pdf(?:[?#].*?)?)["']/is;
+    const anchorMatch = html.match(anchorRegex);
+    if (anchorMatch && anchorMatch[1]) {
+        let extractedHref = anchorMatch[1];
+         console.log(`Found potential anchor link in HTML: ${extractedHref}`);
+         // If it's a relative path (common on Sci-Hub), we need the base URL context, which is hard without knowing the exact mirror structure.
+         // We'll assume absolute URLs starting with // or http for now.
+         if (extractedHref.startsWith('//')) {
+            return `https:${extractedHref}`;
+         } else if (extractedHref.startsWith('http')) {
+            return extractedHref;
+         } else {
+            console.warn(`Found relative PDF link (${extractedHref}), cannot resolve without base URL.`);
+            // Cannot reliably construct the full URL here without the base domain.
+            return null;
+         }
+    }
+
+    console.log("No direct PDF download link pattern found in the HTML.");
+    return null;
+}
+
+
+/**
  * Attempts to download a PDF from Sci-Hub for the given DOI using Axios.
+ * Handles direct PDF downloads and attempts to parse HTML for download links.
  * @param input The input containing the DOI.
  * @returns A promise resolving to the SciHubOutput.
  */
@@ -94,124 +141,152 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
     const { doi } = validation.data;
     const sciHubDomains = ['sci-hub.se', 'sci-hub.st', 'sci-hub.ru', 'sci-hub.hk', 'sci-hub.tw'];
     let lastError: any = new Error('Failed to connect to any Sci-Hub mirror.');
-    let resolvedUrl: string | undefined = undefined;
+    let finalDownloadUrl: string | undefined = undefined; // Track the URL used for the actual PDF download
     let finalContentType: string | undefined = undefined;
+
 
     console.log(`Starting download process for DOI: ${doi} ${USE_PROXY ? `via proxy ${proxyUrl}` : ''}`);
 
     for (const domain of sciHubDomains) {
         const initialSciHubUrl = `https://${domain}/${doi}`;
+        let currentUrl = initialSciHubUrl; // URL being requested
+
         try {
-            console.log(`Step 1: Resolving URL for DOI: ${doi} from ${initialSciHubUrl}`);
+            console.log(`Step 1: Initial request for DOI: ${doi} from ${currentUrl}`);
 
-            // === Step 1: Initial request to handle redirects and get final URL ===
-            // Make a HEAD request first to avoid downloading unnecessary HTML if it's not a PDF redirect
-            let headResponse: AxiosResponse;
+            // Make a GET request, requesting text initially to handle both HTML and potential PDF redirects
+            let response: AxiosResponse;
             try {
-                 headResponse = await axios.head(initialSciHubUrl, getAxiosConfig());
-                 resolvedUrl = headResponse.request?.responseURL || headResponse.request?._redirectable?._options?.href || initialSciHubUrl; // Get final URL after redirects
-            } catch (headError: any) {
-                 // If HEAD fails (e.g., 405 Method Not Allowed), try GET immediately
-                if (axios.isAxiosError(headError) && headError.response?.status === 405) {
-                    console.warn(`HEAD request failed for ${initialSciHubUrl}, trying GET...`);
-                     const getResponse = await axios.get(initialSciHubUrl, getAxiosConfig('arraybuffer')); // Get binary data directly
-                     resolvedUrl = getResponse.request?.responseURL || getResponse.request?._redirectable?._options?.href || initialSciHubUrl;
-                     headResponse = getResponse; // Use the GET response for checks below
-                } else {
-                    console.error(`Initial request failed for ${initialSciHubUrl}:`, headError.message || headError);
-                    lastError = headError;
-                    continue; // Try next domain
-                }
-
+                response = await axios.get(currentUrl, getAxiosConfig('text')); // Request text first
+                currentUrl = response.request?.responseURL || response.request?._redirectable?._options?.href || currentUrl; // Get final URL after redirects
+                finalContentType = response.headers['content-type']?.split(';')[0]; // Get content type without charset
+                console.log(`Initial response from ${currentUrl}: Status=${response.status}, Content-Type=${finalContentType}`);
+            } catch (initialError: any) {
+                console.error(`Initial request failed for ${domain}:`, initialError.message || initialError);
+                lastError = initialError;
+                continue; // Try next domain
             }
 
-            console.log(`Resolved URL for ${doi} from ${domain}: ${resolvedUrl}`);
-            finalContentType = headResponse.headers['content-type'];
-            console.log(`Initial response status: ${headResponse.status}, Content-Type: ${finalContentType}`);
 
-            // Check status and content type from the initial response
-             if (headResponse.status >= 400) {
-                 let errorBody = '';
-                 if (headResponse.data) {
-                      // If responseType was arraybuffer, need to convert it to string to check content
-                     if (headResponse.config.responseType === 'arraybuffer' && headResponse.data instanceof ArrayBuffer) {
-                         errorBody = Buffer.from(headResponse.data).toString('utf-8');
-                     } else if (typeof headResponse.data === 'string'){
-                        errorBody = headResponse.data;
-                     }
-                 }
-                 console.error(`Initial request failed with status ${headResponse.status} for ${resolvedUrl}`);
+            // Check status from the initial response
+             if (response.status >= 400) {
+                 let errorBody = typeof response.data === 'string' ? response.data : '';
+                 console.error(`Initial request failed with status ${response.status} for ${currentUrl}`);
                  if (errorBody.toLowerCase().includes('article not found')) {
                      lastError = new Error('Article not found on Sci-Hub.');
                  } else if (errorBody.toLowerCase().includes('captcha')) {
                     lastError = new Error('Sci-Hub requires CAPTCHA.');
                  } else {
-                    lastError = new Error(`Initial request failed with status ${headResponse.status}`);
+                    lastError = new Error(`Initial request failed with status ${response.status}`);
                  }
                   // If we got a 4xx error, it's likely the DOI is the issue, not the mirror
-                 if (headResponse.status >= 400 && headResponse.status < 500) {
-                     return { success: false, resolvedUrl: resolvedUrl, errorMessage: lastError.message, contentType: finalContentType };
+                 if (response.status < 500) {
+                     return { success: false, resolvedUrl: currentUrl, errorMessage: lastError.message, contentType: finalContentType };
                  }
                  continue; // Try next domain for server errors (5xx)
              }
 
 
-            // === Step 2: Check Content-Type and potentially fetch content if needed ===
+            // === Step 2: Check Content-Type and Process ===
             if (finalContentType?.includes('application/pdf')) {
-                console.log(`Initial response is PDF for ${doi}. Fetching content...`);
+                console.log(`Received direct PDF response for ${doi} from ${currentUrl}. Fetching binary content...`);
+                finalDownloadUrl = currentUrl; // This is the direct download URL
 
-                // If the initial request wasn't already a GET with arraybuffer, fetch it now
-                let contentResponse: AxiosResponse<ArrayBuffer>;
-                if (headResponse.config.method?.toUpperCase() !== 'GET' || headResponse.config.responseType !== 'arraybuffer') {
-                     contentResponse = await axios.get(resolvedUrl, getAxiosConfig('arraybuffer'));
-                      if (contentResponse.status >= 400) {
-                         console.error(`Content fetch failed with status ${contentResponse.status} for ${resolvedUrl}`);
-                         lastError = new Error(`Content fetch failed with status ${contentResponse.status}`);
-                          // Treat as final failure for this DOI if 4xx
-                         if (contentResponse.status < 500) return { success: false, resolvedUrl: resolvedUrl, errorMessage: lastError.message, contentType: finalContentType };
-                         continue; // Try next domain for 5xx
-                      }
-                } else {
-                     contentResponse = headResponse as AxiosResponse<ArrayBuffer>; // Reuse the response if suitable
-                }
+                // Fetch the actual PDF content as arraybuffer
+                let pdfResponse: AxiosResponse<ArrayBuffer>;
+                 try {
+                    pdfResponse = await axios.get(finalDownloadUrl, getAxiosConfig('arraybuffer'));
+                 } catch (pdfError: any) {
+                     console.error(`Failed to fetch direct PDF content from ${finalDownloadUrl}:`, pdfError.message || pdfError);
+                     lastError = pdfError;
+                     continue; // Try next domain
+                 }
 
-                const buffer = contentResponse.data;
+                 if (pdfResponse.status >= 400) {
+                     console.error(`Direct PDF download failed with status ${pdfResponse.status} for ${finalDownloadUrl}`);
+                     lastError = new Error(`Direct PDF download failed with status ${pdfResponse.status}`);
+                     if (pdfResponse.status < 500) return { success: false, resolvedUrl: finalDownloadUrl, errorMessage: lastError.message, contentType: finalContentType };
+                     continue; // Try next domain for 5xx
+                 }
+
+                const buffer = pdfResponse.data;
                 if (!buffer || buffer.byteLength === 0) {
-                    console.error(`Received empty PDF buffer for ${doi} from ${resolvedUrl}`);
+                    console.error(`Received empty PDF buffer for ${doi} from ${finalDownloadUrl}`);
                     lastError = new Error('Downloaded PDF file is empty.');
                     continue; // Try next domain, might be a temporary issue
                 }
                 const base64Pdf = Buffer.from(buffer).toString('base64');
                 const dataUri = `data:application/pdf;base64,${base64Pdf}`;
-                console.log(`Successfully generated data URI for ${doi}. Length: ${dataUri.length}`);
-                return { success: true, dataUri, resolvedUrl: resolvedUrl, contentType: finalContentType };
+                console.log(`Successfully generated data URI for ${doi} from direct PDF. Length: ${dataUri.length}`);
+                return { success: true, dataUri, resolvedUrl: finalDownloadUrl, contentType: finalContentType };
 
             } else if (finalContentType?.includes('html')) {
-                 console.warn(`Received HTML instead of PDF for DOI: ${doi} from ${resolvedUrl}.`);
-                 // Fetch the HTML body if we only did a HEAD request
-                 let bodyText = '';
-                 if (headResponse.config.method?.toUpperCase() === 'HEAD') {
-                    const getResponse = await axios.get(resolvedUrl, getAxiosConfig('text'));
-                     if (getResponse.status < 400 && typeof getResponse.data === 'string') {
-                         bodyText = getResponse.data;
-                     }
-                 } else if (typeof headResponse.data === 'string') {
-                     bodyText = headResponse.data;
-                 }
+                 const htmlContent = typeof response.data === 'string' ? response.data : '';
+                 console.log(`Received HTML for ${doi} from ${currentUrl}. Attempting to extract PDF link...`);
+                 // console.log(`HTML Body (first 500 chars): ${htmlContent.substring(0, 500)}`); // Optional: log HTML snippet
 
-                 if (bodyText.toLowerCase().includes('article not found')) {
-                     lastError = new Error('Article not found on Sci-Hub (HTML response).');
-                 } else if (bodyText.toLowerCase().includes('captcha')) {
-                    lastError = new Error('Sci-Hub requires CAPTCHA.');
+                 const extractedPdfUrl = extractPdfLinkFromHtml(htmlContent);
+
+                 if (extractedPdfUrl) {
+                    console.log(`Step 3: Found embedded PDF link: ${extractedPdfUrl}. Fetching PDF content...`);
+                    finalDownloadUrl = extractedPdfUrl; // Update the final URL
+
+                     // Fetch the actual PDF content from the extracted URL
+                     let pdfResponse: AxiosResponse<ArrayBuffer>;
+                     try {
+                         // Add referer from the page we just parsed
+                         const pdfConfig = getAxiosConfig('arraybuffer');
+                         pdfConfig.headers = { ...pdfConfig.headers, 'Referer': currentUrl };
+                         pdfResponse = await axios.get(finalDownloadUrl, pdfConfig);
+                         finalContentType = pdfResponse.headers['content-type']?.split(';')[0]; // Update content type from final download
+                     } catch (pdfError: any) {
+                         console.error(`Failed to fetch PDF content from extracted link ${finalDownloadUrl}:`, pdfError.message || pdfError);
+                         lastError = pdfError;
+                         continue; // Try next domain
+                     }
+
+                     if (pdfResponse.status >= 400) {
+                         console.error(`PDF download from extracted link failed with status ${pdfResponse.status} for ${finalDownloadUrl}`);
+                         lastError = new Error(`PDF download from extracted link failed with status ${pdfResponse.status}`);
+                         if (pdfResponse.status < 500) return { success: false, resolvedUrl: finalDownloadUrl, errorMessage: lastError.message, contentType: finalContentType };
+                         continue; // Try next domain for 5xx
+                     }
+
+                     // Check content type AGAIN from the actual download response
+                     if (!finalContentType?.includes('application/pdf')) {
+                         console.error(`Extracted link ${finalDownloadUrl} did not return PDF. Content-Type: ${finalContentType}`);
+                         lastError = new Error(`Extracted link did not provide a PDF (Content-Type: ${finalContentType ?? 'unknown'}).`);
+                         continue; // Try next domain
+                     }
+
+                     const buffer = pdfResponse.data;
+                     if (!buffer || buffer.byteLength === 0) {
+                        console.error(`Received empty PDF buffer for ${doi} from extracted link ${finalDownloadUrl}`);
+                        lastError = new Error('Downloaded PDF file is empty.');
+                        continue; // Try next domain
+                     }
+
+                     const base64Pdf = Buffer.from(buffer).toString('base64');
+                     const dataUri = `data:application/pdf;base64,${base64Pdf}`;
+                     console.log(`Successfully generated data URI for ${doi} from extracted link. Length: ${dataUri.length}`);
+                     return { success: true, dataUri, resolvedUrl: finalDownloadUrl, contentType: finalContentType };
+
                  } else {
-                    lastError = new Error('Received HTML page instead of PDF (unknown reason).');
+                     // HTML received, but no recognizable download link found
+                     console.warn(`HTML received from ${currentUrl}, but no download link found.`);
+                      if (htmlContent.toLowerCase().includes('article not found')) {
+                         lastError = new Error('Article not found on Sci-Hub (HTML response).');
+                     } else if (htmlContent.toLowerCase().includes('captcha')) {
+                        lastError = new Error('Sci-Hub requires CAPTCHA.');
+                     } else {
+                        lastError = new Error('Received HTML page, but could not find a download link.');
+                     }
+                     // Treat as final failure for this DOI if no link found in HTML
+                     return { success: false, resolvedUrl: currentUrl, errorMessage: lastError.message, contentType: finalContentType };
                  }
-                 console.warn(`HTML Body (first 500 chars): ${bodyText.substring(0, 500)}`);
-                  // HTML usually means the DOI is the problem, or captcha. Treat as final failure for this DOI.
-                  return { success: false, resolvedUrl: resolvedUrl, errorMessage: lastError.message, contentType: finalContentType };
 
             } else {
-                console.error(`Unexpected content type: ${finalContentType} for ${doi} from ${resolvedUrl}.`);
+                console.error(`Unexpected content type: ${finalContentType} for ${doi} from ${currentUrl}.`);
                 lastError = new Error(`Unexpected content type received: ${finalContentType ?? 'unknown'}`);
                 continue; // Try next domain
             }
@@ -225,13 +300,15 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                      lastError = new Error('Download timed out.');
                  } else if (error.response) {
                      console.warn(`Request failed with status ${error.response.status} for ${domain}.`);
-                      // Treat 4xx errors on a specific mirror as potentially final for the DOI
+                     // Treat 4xx errors on a specific mirror as potentially final for the DOI
                      if (error.response.status >= 400 && error.response.status < 500) {
                         let errorBody = '';
                          if (error.response.data && typeof error.response.data === 'string') {
                              errorBody = error.response.data;
-                         } else if (error.response.data && error.response.config.responseType === 'arraybuffer') {
-                             errorBody = Buffer.from(error.response.data).toString('utf-8');
+                         } else if (error.response.data && error.response.config?.responseType === 'arraybuffer') {
+                             try { errorBody = Buffer.from(error.response.data).toString('utf-8'); } catch {}
+                         } else if (error.response.data && error.response.config?.responseType === 'text') {
+                              errorBody = error.response.data;
                          }
                          if (errorBody.toLowerCase().includes('article not found')) {
                               lastError = new Error('Article not found on Sci-Hub.');
@@ -240,7 +317,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                          } else {
                             lastError = new Error(`Request failed with status ${error.response.status}`);
                          }
-                         return { success: false, resolvedUrl: resolvedUrl, errorMessage: lastError.message, contentType: finalContentType };
+                         return { success: false, resolvedUrl: currentUrl, errorMessage: lastError.message, contentType: finalContentType };
                      }
                  } else if (error.request) {
                       console.warn(`No response received for ${domain}. Network issue?`);
@@ -268,12 +345,14 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
             errorMessage = 'Article not found on Sci-Hub (404).';
         } else if (errorMessage.includes('status')) {
             // Keep specific status errors if not already handled
-        } else {
-             errorMessage = `An unexpected error occurred: ${errorMessage}`; // Generic fallback
+        } else if (!errorMessage.startsWith('Received HTML page') && !errorMessage.startsWith('Extracted link did not provide')) {
+             // Avoid overly generic message if a more specific HTML/content type error occurred
+             errorMessage = `An unexpected error occurred: ${errorMessage}`;
         }
     } else if (typeof lastError === 'string') {
         errorMessage = lastError;
     }
 
-    return { success: false, resolvedUrl: resolvedUrl, errorMessage, contentType: finalContentType };
+    // Return the last URL attempted for download if available, otherwise the initial requested URL
+    return { success: false, resolvedUrl: finalDownloadUrl || sciHubDomains.map(d => `https://${d}/${doi}`)[0], errorMessage, contentType: finalContentType };
 }
