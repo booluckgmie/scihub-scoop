@@ -21,15 +21,16 @@ import { useToast } from '@/hooks/use-toast';
 import { downloadSciHubPdf, type SciHubOutput, type SciHubInput } from '@/lib/sci-hub-downloader';
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { CheckCircle, AlertTriangle, Download, Loader2, FileWarning, ExternalLink, Info } from 'lucide-react';
+import { CheckCircle, AlertTriangle, Download, Loader2, FileWarning, ExternalLink, Info, Package } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from "@/components/ui/tooltip"
-
+} from "@/components/ui/tooltip";
+import JSZip from 'jszip';
+import { dataUriToBlob } from '@/lib/utils'; // Import the helper function
 
 // Polyfill fetch if running in a Node.js environment where it might not be global
 // Although 'node-fetch-native' aims to solve this, explicit checks can be helpful.
@@ -121,6 +122,7 @@ const DownloadStatus: FC<DownloadStatusProps> = ({ status }) => {
 
 export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
+  const [isZipping, setIsZipping] = useState(false);
   const [downloadStatus, setDownloadStatus] = useState<DownloadStatusEntry[]>([]);
   const [progress, setProgress] = useState(0);
   const { toast } = useToast();
@@ -131,6 +133,8 @@ export default function Home() {
       dois: '',
     },
   });
+
+  const successfulDownloads = downloadStatus.filter(r => r.success && r.dataUri);
 
   const onSubmit = async (values: FormValues) => {
     setIsLoading(true);
@@ -241,10 +245,10 @@ export default function Home() {
             setProgress(100);
         }
 
-        const successfulDownloads = results.filter(r => r.success).length;
+        const successfulDownloadsCount = results.filter(r => r.success).length;
         toast({
             title: "Processing Complete",
-            description: `Finished processing ${doisToProcess.length} DOI(s). ${successfulDownloads} download link(s) generated.`,
+            description: `Finished processing ${doisToProcess.length} DOI(s). ${successfulDownloadsCount} download link(s) generated.`,
         });
 
     } catch (error) {
@@ -261,6 +265,61 @@ export default function Home() {
         // setTimeout(() => setProgress(0), 5000);
     }
   };
+
+  const handleDownloadZip = async () => {
+     if (successfulDownloads.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "No PDFs to Download",
+        description: "There are no successfully downloaded PDFs to include in the ZIP file.",
+      });
+      return;
+    }
+
+    setIsZipping(true);
+    toast({
+      title: "Creating ZIP File",
+      description: "Please wait while the PDF files are being zipped...",
+    });
+
+    const zip = new JSZip();
+
+    try {
+      successfulDownloads.forEach((result) => {
+        if (result.dataUri) {
+          const blob = dataUriToBlob(result.dataUri);
+          const filename = `${result.doi.replace(/[\/:.]/g, '_')}.pdf`;
+          zip.file(filename, blob, { binary: true });
+        }
+      });
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const zipUrl = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = zipUrl;
+      link.download = 'sci-hub-scope-papers.zip'; // Suggested filename for the zip
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(zipUrl); // Clean up the object URL
+
+      toast({
+        title: "ZIP Download Started",
+        description: "Your ZIP file containing the downloaded PDFs has started downloading.",
+      });
+
+    } catch (error: any) {
+        console.error("Error creating ZIP file:", error);
+        toast({
+            variant: "destructive",
+            title: "ZIP Creation Failed",
+            description: error.message || "An unexpected error occurred while creating the ZIP file.",
+        });
+    } finally {
+        setIsZipping(false);
+    }
+  };
+
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center p-4 md:p-12 lg:p-24 bg-secondary">
@@ -307,7 +366,7 @@ export default function Home() {
               <Button
                 type="submit"
                 className="w-full bg-accent text-accent-foreground hover:bg-accent/90 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-2 text-base py-3 rounded-md shadow-md transition-all duration-200 ease-in-out active:scale-[0.98]"
-                disabled={isLoading}
+                disabled={isLoading || isZipping}
                 aria-live="polite" // Announce loading state changes
               >
                 {isLoading ? (
@@ -332,9 +391,31 @@ export default function Home() {
             </div>
           )}
 
-          {/* Display download status only after loading is complete or if there are results */}
-           {(downloadStatus.length > 0) && (
+          {/* Display download status and ZIP button */}
+           {downloadStatus.length > 0 && (
+            <>
               <DownloadStatus status={downloadStatus} />
+              {successfulDownloads.length > 0 && (
+                  <Button
+                    onClick={handleDownloadZip}
+                    className="w-full mt-6 bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-2 text-base py-3 rounded-md shadow-md transition-all duration-200 ease-in-out active:scale-[0.98]"
+                    disabled={isZipping || isLoading}
+                    aria-live="polite"
+                  >
+                    {isZipping ? (
+                      <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" aria-hidden="true" />
+                        Creating ZIP...
+                      </>
+                    ) : (
+                      <>
+                        <Package className="mr-2 h-5 w-5" aria-hidden="true" />
+                        Download All as ZIP ({successfulDownloads.length} file{successfulDownloads.length !== 1 ? 's' : ''})
+                      </>
+                    )}
+                  </Button>
+              )}
+            </>
            )}
 
            {/* Show message if loading finished but no results were generated and form was submitted */}
