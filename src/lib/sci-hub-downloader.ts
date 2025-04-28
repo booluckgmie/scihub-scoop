@@ -279,7 +279,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                      } else if (htmlContent.toLowerCase().includes('captcha')) {
                         lastError = new Error('Sci-Hub requires CAPTCHA.');
                      } else {
-                        lastError = new Error('Received HTML page, but could not find a download link.');
+                        lastError = new Error('There may be an issue loading the page, as it was unable to find a download link.');
                      }
                      // Treat as final failure for this DOI if no link found in HTML
                      return { success: false, resolvedUrl: currentUrl, errorMessage: lastError.message, contentType: finalContentType };
@@ -345,7 +345,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
             errorMessage = 'Article not found on Sci-Hub (404).';
         } else if (errorMessage.includes('status')) {
             // Keep specific status errors if not already handled
-        } else if (!errorMessage.startsWith('Received HTML page') && !errorMessage.startsWith('Extracted link did not provide')) {
+        } else if (!errorMessage.startsWith('There may be an issue loading the page') && !errorMessage.startsWith('Extracted link did not provide')) {
              // Avoid overly generic message if a more specific HTML/content type error occurred
              errorMessage = `An unexpected error occurred: ${errorMessage}`;
         }
