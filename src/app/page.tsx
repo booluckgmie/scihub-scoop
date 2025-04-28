@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { sciHubFlow, type SciHubOutput } from '@/ai/sci-hub'; // Import the updated Genkit flow
+import { downloadSciHubPdf, type SciHubOutput, type SciHubInput } from '@/lib/sci-hub-downloader'; // Import the new downloader function
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CheckCircle, AlertTriangle, Download, Loader2, FileWarning, ExternalLink, Info } from 'lucide-react';
@@ -189,7 +189,7 @@ export default function Home() {
     }
 
 
-    // 3. Process DOIs using the Genkit Flow
+    // 3. Process DOIs using the server-side function
     try {
         const totalSteps = doisToProcess.length;
         let currentStep = 0;
@@ -202,28 +202,29 @@ export default function Home() {
 
         // Process each unique DOI sequentially
         for (const doi of doisToProcess) {
-             let flowResult: SciHubOutput | null = null; // Initialize result
+             let downloadResult: SciHubOutput | null = null; // Initialize result
              try {
                 console.log(`Processing DOI: ${doi}`);
-                flowResult = await sciHubFlow({ doi }); // Call the updated flow
-                console.log(`Result for ${doi}:`, flowResult);
+                // Call the new server-side function directly
+                downloadResult = await downloadSciHubPdf({ doi });
+                console.log(`Result for ${doi}:`, downloadResult);
 
                 results.push({
                     doi,
-                    success: flowResult.success,
-                    dataUri: flowResult.dataUri,
-                    resolvedUrl: flowResult.resolvedUrl,
-                    errorMessage: flowResult.errorMessage,
-                    contentType: flowResult.contentType,
+                    success: downloadResult.success,
+                    dataUri: downloadResult.dataUri,
+                    resolvedUrl: downloadResult.resolvedUrl,
+                    errorMessage: downloadResult.errorMessage,
+                    contentType: downloadResult.contentType,
                 });
 
-            } catch (flowError: any) {
-                console.error(`Error processing flow for DOI ${doi}:`, flowError);
-                 // Push error result even if the flow itself throws an unexpected error
+            } catch (downloadError: any) {
+                console.error(`Error processing download for DOI ${doi}:`, downloadError);
+                 // Push error result even if the function itself throws an unexpected error
                  results.push({
                     doi,
                     success: false,
-                    errorMessage: flowError.message || 'Flow execution failed unexpectedly.',
+                    errorMessage: downloadError.message || 'Download function failed unexpectedly.',
                     // Other fields will be undefined
                 });
             } finally {
