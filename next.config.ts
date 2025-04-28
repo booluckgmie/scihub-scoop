@@ -20,6 +20,7 @@ const nextConfig: NextConfig = {
   },
   // Attempt to fix module not found errors for Node.js modules in Server Components
   experimental: {
+    // Ensure necessary Node.js modules used by server-side flows are externalized
     serverComponentsExternalPackages: ['socks-proxy-agent', 'node-fetch-native'],
   },
 };

@@ -18,19 +18,23 @@ import {
 } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { sciHubFlow, type SciHubOutput } from '@/ai/sci-hub'; // Import the Genkit flow
+import { sciHubFlow, type SciHubOutput } from '@/ai/sci-hub'; // Import the updated Genkit flow
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { CheckCircle, AlertTriangle, Download, Loader2, FileWarning, ExternalLink } from 'lucide-react';
-import { Badge } from '@/components/ui/badge'; // Import Badge component
+import { CheckCircle, AlertTriangle, Download, Loader2, FileWarning, ExternalLink, Info } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+
 
 // Polyfill fetch if running in a Node.js environment where it might not be global
 // Although 'node-fetch-native' aims to solve this, explicit checks can be helpful.
 if (typeof fetch === 'undefined') {
-  console.warn("Global fetch is undefined. Attempting to use node-fetch-native polyfill if available.");
-  // If 'node-fetch-native' was correctly installed and imported elsewhere (like in the flow),
-  // this might not be strictly necessary, but serves as a fallback concept.
-  // Avoid direct require here in client component. Rely on environment providing fetch.
+  console.warn("Global fetch is undefined. Ensure Node version supports fetch or node-fetch-native is polyfilling.");
 }
 
 
@@ -40,13 +44,10 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
-// Update interface to match SciHubOutput and include the original DOI
-interface DownloadStatusEntry {
+// Update interface to match the updated SciHubOutput structure
+interface DownloadStatusEntry extends SciHubOutput {
   doi: string;
-  success: boolean;
-  downloadUrl?: string; // This will hold the data URI
-  errorMessage?: string;
-  contentType?: string; // Add content type for debugging
+  // success, dataUri, resolvedUrl, errorMessage, contentType are inherited from SciHubOutput
 }
 
 interface DownloadStatusProps {
@@ -64,53 +65,53 @@ const DownloadStatus: FC<DownloadStatusProps> = ({ status }) => {
         <CardTitle>Download Status</CardTitle>
       </CardHeader>
       <CardContent>
-        <ul className="space-y-3">
-          {status.map((result) => (
-            <li key={result.doi} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 border border-border rounded-md bg-background hover:bg-muted/50 transition-colors">
-               <div className="flex-1 min-w-0 mr-4 mb-2 sm:mb-0">
-                 <span className="block truncate font-mono text-sm text-foreground">{result.doi}</span>
-                 {result.contentType && (
-                   <Badge variant="outline" className="mt-1 text-xs font-normal">
-                     Type: {result.contentType.split(';')[0]} {/* Show only main type */}
-                   </Badge>
-                 )}
-               </div>
-              <div className="flex-shrink-0 flex items-center">
-                {result.success && result.downloadUrl ? (
-                   // Check if it's a data URI before creating download link
-                  result.downloadUrl.startsWith('data:') ? (
+         <TooltipProvider>
+            <ul className="space-y-3">
+            {status.map((result) => (
+                <li key={result.doi} className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-3 border border-border rounded-md bg-background hover:bg-muted/50 transition-colors">
+                 <div className="flex-1 min-w-0 mr-4 mb-2 sm:mb-0">
+                     <Tooltip>
+                         <TooltipTrigger asChild>
+                           <span className="block truncate font-mono text-sm text-foreground cursor-help">{result.doi}</span>
+                         </TooltipTrigger>
+                         <TooltipContent side="top" align="start">
+                           <p>Original DOI: {result.doi}</p>
+                           {result.resolvedUrl && <p>Resolved URL: {result.resolvedUrl}</p>}
+                           {result.contentType && <p>Content Type: {result.contentType}</p>}
+                         </TooltipContent>
+                     </Tooltip>
+                 </div>
+                <div className="flex-shrink-0 flex items-center">
+                    {result.success && result.dataUri ? (
                     <a
-                      href={result.downloadUrl}
-                      download={`${result.doi.replace(/[\/:.]/g, '_')}.pdf`}
-                      className="flex items-center text-green-600 hover:text-green-700 hover:underline"
-                      aria-label={`Download PDF for DOI ${result.doi}`}
+                        href={result.dataUri}
+                        download={`${result.doi.replace(/[\/:.]/g, '_')}.pdf`}
+                        className="flex items-center text-green-600 hover:text-green-700 hover:underline"
+                        aria-label={`Download PDF for DOI ${result.doi}`}
                     >
-                      <Download className="h-5 w-5 mr-2 flex-shrink-0" />
-                      Download PDF
+                        <Download className="h-5 w-5 mr-2 flex-shrink-0" />
+                        Download PDF
                     </a>
-                  ) : (
-                    // If it's a regular URL (future possibility)
-                    <a
-                      href={result.downloadUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center text-blue-600 hover:text-blue-700 hover:underline"
-                      aria-label={`Open download link for DOI ${result.doi}`}
-                    >
-                      <ExternalLink className="h-5 w-5 mr-2 flex-shrink-0" />
-                      Open Link
-                    </a>
-                  )
-                ) : (
-                  <div className="flex items-center text-destructive" title={result.errorMessage}>
-                    <AlertTriangle className="h-5 w-5 mr-2 flex-shrink-0" />
-                    <span className="text-sm truncate">{result.errorMessage || 'Download Failed'}</span>
-                  </div>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
+                    ) : (
+                    <Tooltip>
+                         <TooltipTrigger asChild>
+                         <div className="flex items-center text-destructive cursor-help">
+                             <AlertTriangle className="h-5 w-5 mr-2 flex-shrink-0" />
+                             <span className="text-sm truncate max-w-[200px] sm:max-w-[300px]">
+                             {result.errorMessage || 'Download Failed'}
+                             </span>
+                         </div>
+                         </TooltipTrigger>
+                         <TooltipContent side="top" align="end">
+                           <p>{result.errorMessage || 'Download Failed'}</p>
+                         </TooltipContent>
+                     </Tooltip>
+                    )}
+                </div>
+                </li>
+            ))}
+            </ul>
+         </TooltipProvider>
       </CardContent>
     </Card>
   );
@@ -134,6 +135,7 @@ export default function Home() {
     setIsLoading(true);
     setDownloadStatus([]); // Clear previous results
     setProgress(0);
+    form.clearErrors(); // Clear previous form errors
 
     // 1. Parse and Validate DOIs
     const doiList = values.dois
@@ -142,71 +144,87 @@ export default function Home() {
       .filter((doi) => doi.length > 5 && doi.includes('/')); // Basic DOI format check
 
     if (doiList.length === 0) {
+        form.setError("dois", {
+           type: "manual",
+           message: "No valid DOIs found. Please enter valid DOIs separated by commas, semicolons, or newlines.",
+        });
         toast({
             variant: "destructive",
             title: "Invalid Input",
-            description: "No valid DOIs found. Please enter valid DOIs separated by commas, semicolons, or newlines.",
+            description: "No valid DOIs found in the input.",
         });
         setIsLoading(false);
         return;
     }
 
-    // 2. Apply Trial Limit
+    // 2. Apply Trial Limit and Ensure Uniqueness
     const trialLimit = 3;
-    const doisToProcess = doiList.slice(0, trialLimit);
-    const uniqueDoisToProcess = [...new Set(doisToProcess)]; // Process unique DOIs only
+    const uniqueDois = [...new Set(doiList)]; // Process unique DOIs only
+    const doisToProcess = uniqueDois.slice(0, trialLimit);
 
-    if (doiList.length > trialLimit) {
+
+    if (uniqueDois.length > trialLimit) {
         toast({
-            title: "Trial Limit Notice",
-            description: `Processing the first ${trialLimit} unique DOIs entered (found ${uniqueDoisToProcess.length}). Upgrade for unlimited downloads.`,
-            duration: 5000, // Keep message longer
+            title: "Trial Limit Applied",
+            description: `Processing the first ${trialLimit} unique DOIs (out of ${uniqueDois.length} unique found). Upgrade for unlimited downloads.`,
+            duration: 5000,
         });
-    } else if (doisToProcess.length !== uniqueDoisToProcess.length) {
+    } else if (doiList.length > uniqueDois.length) {
          toast({
-            title: "Duplicate DOIs Removed",
-            description: `Processing ${uniqueDoisToProcess.length} unique DOI(s).`,
+            title: "Duplicates Removed",
+            description: `Processing ${doisToProcess.length} unique DOI(s). Duplicates were ignored.`,
             duration: 3000,
         });
+    }
+
+    if (doisToProcess.length === 0) {
+        // This case should theoretically not happen if validation passed, but good to have.
+        toast({
+            variant: "destructive",
+            title: "No DOIs to Process",
+            description: "After validation and deduplication, no DOIs remained.",
+        });
+        setIsLoading(false);
+        return;
     }
 
 
     // 3. Process DOIs using the Genkit Flow
     try {
-        const totalSteps = uniqueDoisToProcess.length;
+        const totalSteps = doisToProcess.length;
         let currentStep = 0;
         const results: DownloadStatusEntry[] = [];
 
         const updateProgress = () => {
             currentStep++;
-            // Use Math.min to ensure progress doesn't exceed 100 due to rounding
             setProgress(Math.min(100, (currentStep / totalSteps) * 100));
         }
 
         // Process each unique DOI sequentially
-        for (const doi of uniqueDoisToProcess) {
-             let result: SciHubOutput | null = null; // Initialize result
+        for (const doi of doisToProcess) {
+             let flowResult: SciHubOutput | null = null; // Initialize result
              try {
                 console.log(`Processing DOI: ${doi}`);
-                result = await sciHubFlow({ doi }); // Call the flow
-                console.log(`Result for ${doi}:`, result);
+                flowResult = await sciHubFlow({ doi }); // Call the updated flow
+                console.log(`Result for ${doi}:`, flowResult);
 
                 results.push({
                     doi,
-                    success: result.success,
-                    downloadUrl: result.dataUri, // Store the data URI here
-                    errorMessage: result.errorMessage,
-                    contentType: result.contentType, // Store content type
+                    success: flowResult.success,
+                    dataUri: flowResult.dataUri,
+                    resolvedUrl: flowResult.resolvedUrl,
+                    errorMessage: flowResult.errorMessage,
+                    contentType: flowResult.contentType,
                 });
 
             } catch (flowError: any) {
                 console.error(`Error processing flow for DOI ${doi}:`, flowError);
-                 // Push error result even if the flow itself throws an error
+                 // Push error result even if the flow itself throws an unexpected error
                  results.push({
                     doi,
                     success: false,
-                    errorMessage: flowError.message || 'Flow execution failed.',
-                    contentType: result?.contentType, // Include content type if available
+                    errorMessage: flowError.message || 'Flow execution failed unexpectedly.',
+                    // Other fields will be undefined
                 });
             } finally {
                 // Update progress and status after each DOI attempt (success or failure)
@@ -216,13 +234,15 @@ export default function Home() {
             }
         }
 
-        // Final progress update to ensure it reaches 100%
-        setProgress(100);
+        // Final progress update to ensure it reaches 100% if all steps completed
+        if (currentStep === totalSteps) {
+            setProgress(100);
+        }
 
         const successfulDownloads = results.filter(r => r.success).length;
         toast({
             title: "Processing Complete",
-            description: `Finished processing ${uniqueDoisToProcess.length} DOI(s). ${successfulDownloads} successful download(s).`,
+            description: `Finished processing ${doisToProcess.length} DOI(s). ${successfulDownloads} successful download(s).`,
         });
 
     } catch (error) {
@@ -235,7 +255,7 @@ export default function Home() {
          setProgress(0); // Reset progress on major error
     } finally {
         setIsLoading(false);
-        // Optionally reset progress after a delay, or keep it at 100
+        // Optionally keep progress at 100 or reset after a delay
         // setTimeout(() => setProgress(0), 5000);
     }
   };
@@ -249,8 +269,11 @@ export default function Home() {
           </CardTitle>
           <p className="text-muted-foreground text-center mt-2">
             Enter DOIs (separated by comma, semicolon, or newline) to download papers.
-            <br/>
-            <Badge variant="secondary" className="mt-2">Trial Version: Max 3 unique DOIs processed</Badge>
+             <br />
+             <Badge variant="secondary" className="mt-2 cursor-default">
+                <Info className="h-3 w-3 mr-1.5" />
+                Trial Version: Max 3 unique DOIs processed
+             </Badge>
           </p>
         </CardHeader>
         <CardContent className="p-6 md:p-8">
@@ -269,6 +292,7 @@ export default function Home() {
                         className="min-h-[150px] resize-y bg-background border-input focus:border-primary focus:ring-primary text-sm shadow-sm"
                         {...field}
                         aria-describedby="dois-description dois-message"
+                        aria-invalid={!!form.formState.errors.dois} // Indicate invalid state for accessibility
                       />
                     </FormControl>
                     <FormDescription id="dois-description" className="text-xs text-muted-foreground">
@@ -307,17 +331,16 @@ export default function Home() {
           )}
 
           {/* Display download status only after loading is complete or if there are results */}
-          {/* Ensure downloadStatus state is updated correctly for this to show */}
            {(downloadStatus.length > 0) && (
               <DownloadStatus status={downloadStatus} />
            )}
 
            {/* Show message if loading finished but no results were generated and form was submitted */}
-           {!isLoading && downloadStatus.length === 0 && form.formState.isSubmitted && (
+           {!isLoading && downloadStatus.length === 0 && form.formState.isSubmitted && !form.formState.errors.dois && (
              <Card className="mt-8 bg-muted border-dashed border-border">
                 <CardContent className="p-6 text-center text-muted-foreground">
                      <FileWarning className="h-10 w-10 mx-auto mb-4 text-muted-foreground/70" />
-                    <p>No download attempts were processed or all failed.</p>
+                    <p>No download attempts were processed or none were successful.</p>
                     <p className="text-sm">Please check the entered DOIs and network connection, then try again.</p>
                 </CardContent>
              </Card>
@@ -328,6 +351,7 @@ export default function Home() {
             <p>Need unlimited downloads and faster processing?</p>
             {/* Placeholder for Telegram link/button */}
              <Button variant="link" className="text-accent p-0 h-auto mt-1 hover:underline disabled:opacity-50" disabled>
+                <ExternalLink className="h-4 w-4 mr-1.5"/>
                 Upgrade via Telegram (Coming Soon)
             </Button>
           </div>
