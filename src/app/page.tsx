@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/form';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
-import { downloadSciHubPdf, type SciHubOutput, type SciHubInput } from '@/lib/sci-hub-downloader'; // Import the new downloader function
+import { downloadSciHubPdf, type SciHubOutput, type SciHubInput } from '@/lib/sci-hub-downloader';
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CheckCircle, AlertTriangle, Download, Loader2, FileWarning, ExternalLink, Info } from 'lucide-react';
@@ -34,7 +34,8 @@ import {
 // Polyfill fetch if running in a Node.js environment where it might not be global
 // Although 'node-fetch-native' aims to solve this, explicit checks can be helpful.
 if (typeof fetch === 'undefined') {
-  console.warn("Global fetch is undefined. Ensure Node version supports fetch or node-fetch-native is polyfilling.");
+  // console.warn("Global fetch is undefined. Ensure Node version supports fetch or node-fetch-native is polyfilling.");
+    // Commented out as we are now using axios which handles its own dependencies
 }
 
 
@@ -85,7 +86,7 @@ const DownloadStatus: FC<DownloadStatusProps> = ({ status }) => {
                     {result.success && result.dataUri ? (
                     <a
                         href={result.dataUri}
-                        download={`${result.doi.replace(/[\/:.]/g, '_')}.pdf`}
+                        download={`${result.doi.replace(/[\/:.]/g, '_')}.pdf`} // Suggest filename based on DOI
                         className="flex items-center text-green-600 hover:text-green-700 hover:underline"
                         aria-label={`Download PDF for DOI ${result.doi}`}
                     >
@@ -205,9 +206,9 @@ export default function Home() {
              let downloadResult: SciHubOutput | null = null; // Initialize result
              try {
                 console.log(`Processing DOI: ${doi}`);
-                // Call the new server-side function directly
+                // Call the server-side function directly
                 downloadResult = await downloadSciHubPdf({ doi });
-                console.log(`Result for ${doi}:`, downloadResult);
+                console.log(`Result for ${doi}: Success=${downloadResult.success}, HasData=${!!downloadResult.dataUri}, Error=${downloadResult.errorMessage}`);
 
                 results.push({
                     doi,
@@ -219,7 +220,7 @@ export default function Home() {
                 });
 
             } catch (downloadError: any) {
-                console.error(`Error processing download for DOI ${doi}:`, downloadError);
+                console.error(`Unhandled error during download for DOI ${doi}:`, downloadError);
                  // Push error result even if the function itself throws an unexpected error
                  results.push({
                     doi,
@@ -243,7 +244,7 @@ export default function Home() {
         const successfulDownloads = results.filter(r => r.success).length;
         toast({
             title: "Processing Complete",
-            description: `Finished processing ${doisToProcess.length} DOI(s). ${successfulDownloads} successful download(s).`,
+            description: `Finished processing ${doisToProcess.length} DOI(s). ${successfulDownloads} download link(s) generated.`,
         });
 
     } catch (error) {
@@ -269,7 +270,7 @@ export default function Home() {
             Sci-Hub Scope
           </CardTitle>
           <p className="text-muted-foreground text-center mt-2">
-            Enter DOIs (separated by comma, semicolon, or newline) to download papers.
+            Enter DOIs (separated by comma, semicolon, or newline) to generate direct download links.
              <br />
              <Badge variant="secondary" className="mt-2 cursor-default">
                 <Info className="h-3 w-3 mr-1.5" />
@@ -297,7 +298,7 @@ export default function Home() {
                       />
                     </FormControl>
                     <FormDescription id="dois-description" className="text-xs text-muted-foreground">
-                      Paste your list of DOIs here. Separate them using commas, semicolons, or new lines. Prefixes like 'https://doi.org/' will be removed automatically.
+                      Paste your list of DOIs here. Separate them using commas, semicolons, or new lines. Prefixes like 'https://doi.org/' will be removed automatically. PDFs download directly to your browser.
                     </FormDescription>
                     <FormMessage id="dois-message" />
                   </FormItem>
@@ -317,7 +318,7 @@ export default function Home() {
                 ) : (
                   <>
                    <Download className="mr-2 h-5 w-5" aria-hidden="true" />
-                    Download Papers (Trial)
+                    Generate Download Links (Trial)
                   </>
                 )}
               </Button>
