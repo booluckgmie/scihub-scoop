@@ -163,7 +163,7 @@ export default function Home() {
     }
 
     // 2. Apply Trial Limit and Ensure Uniqueness
-    const trialLimit = 3;
+    const trialLimit = 200;
     const uniqueDois = [...new Set(doiList)]; // Process unique DOIs only
     const doisToProcess = uniqueDois.slice(0, trialLimit);
 
