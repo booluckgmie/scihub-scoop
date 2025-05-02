@@ -24,13 +24,13 @@ export type SciHubInput = z.infer<typeof SciHubInputSchema>;
 
 // Define output schema using Zod
 const SciHubOutputSchema = z.object({
-    success: z.boolean(),
-    dataUri: z.string().optional().describe("The Base64 encoded data URI of the PDF file (e.g., 'data:application/pdf;base64,...'). Present only on success."),
-    resolvedUrl: z.string().optional().describe("The final URL from which the PDF was downloaded or attempted."),
-    errorMessage: z.string().optional().describe("Error message if the download failed."),
-    contentType: z.string().optional().describe("The content type received from the final download URL."),
+  success: z.boolean(),
+  dataUri: z.string().optional().describe("The Base64 encoded data URI of the PDF file (e.g., 'data:application/pdf;base64,...'). Present only on success."),
+  resolvedUrl: z.string().optional().describe("The final URL from which the PDF was downloaded or attempted."),
+  errorMessage: z.string().optional().describe("Error message if the download failed."),
+  contentType: z.string().optional().describe("The content type received from the final download URL."),
 });
-export type SciHubOutput = z.infer<typeof SciHubOutputSchema>;
+export type SciHubOutput = z.infer<typeof SciHubOutputSchema>
 
 // --- Proxy Configuration ---
 const USE_PROXY = false; // Set to true to enable proxy
@@ -38,24 +38,24 @@ const proxyUrl = 'socks5://127.0.0.1:7890'; // Your proxy address (SOCKS5 in thi
 // --- End Proxy Configuration ---
 
 const getAxiosAgent = (): https.Agent | undefined => {
-    if (!USE_PROXY) return undefined;
-    try {
-        if (proxyUrl.startsWith('socks')) {
-            console.log(`Using SOCKS proxy agent: ${proxyUrl}`);
-            return new SocksProxyAgent(proxyUrl);
-        } else if (proxyUrl.startsWith('http')) {
-            console.log(`Using HTTPS proxy agent: ${proxyUrl}`);
-            // Axios needs HttpsProxyAgent for http/https proxies when making HTTPS requests
-            return new HttpsProxyAgent(proxyUrl);
-        } else {
-             console.warn(`Unsupported proxy protocol in URL: ${proxyUrl}`);
-             return undefined;
-        }
-    } catch (e) {
-        console.error("Failed to create proxy agent:", e);
-        return undefined;
+  if (!USE_PROXY) return undefined;
+  try {
+    if (proxyUrl.startsWith('socks')) {
+      console.log(`Using SOCKS proxy agent: ${proxyUrl}`);
+      return new SocksProxyAgent(proxyUrl);
+    } else if (proxyUrl.startsWith('http')) {
+      console.log(`Using HTTPS proxy agent: ${proxyUrl}`);
+      // Axios needs HttpsProxyAgent for http/https proxies when making HTTPS requests
+      return new HttpsProxyAgent(proxyUrl);
+    } else {
+      console.warn(`Unsupported proxy protocol in URL: ${proxyUrl}`);
+      return undefined;
     }
-}
+  } catch (e) {
+    console.error("Failed to create proxy agent:", e);
+    return undefined;
+  }
+};
 
 const commonHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
@@ -72,13 +72,13 @@ const getAxiosConfig = (responseType: ResponseType = 'text'): AxiosRequestConfig
         maxRedirects: 10, // Follow redirects (axios default is 5)
         responseType: responseType,
          // Validate status to handle non-2xx responses without throwing immediately
-        validateStatus: function (status) {
-            return status >= 200 && status < 500; // Accept 2xx, 3xx, 4xx
-        },
+        validateStatus: (status) => {
+          return status >= 200 && status < 500; // Accept 2xx, 3xx, 4xx
+        }
     };
     if (agent) {
-       config.httpsAgent = agent;
-       // config.httpAgent = agent; // Uncomment if you need proxy for HTTP too
+        config.httpsAgent = agent;
+        // config.httpAgent = agent; // Uncomment if you need proxy for HTTP too
     }
     return config;
 };
@@ -90,39 +90,46 @@ const getAxiosConfig = (responseType: ResponseType = 'text'): AxiosRequestConfig
  * @returns The extracted URL (starting with https://) or null if not found.
  */
 function extractPdfLinkFromHtml(html: string): string | null {
-    // Regex to find the download link within onclick attribute or similar patterns
-    // It looks for location.href='(//.../(?:pdf|zip))' optionally followed by ?download=true
-    const regex = /location\.href='(\/\/.*?\/[^']+\.(?:pdf|zip))(?:\?download=true)?'/i;
-    const match = html.match(regex);
+  // Regex to find the download link within onclick attribute inside a div with id="buttons"
+  const buttonRegex = /<div id=["']?buttons?["']?.*?<button.*?onclick=["']location\.href=['"]([^'"]+\.(?:pdf|zip))(?:\?download=true)?['"]['"]/is;
+  const buttonMatch = html.match(buttonRegex);
 
-    if (match && match[1]) {
-        const extractedPath = match[1];
-        console.log(`Found potential download link in HTML: ${extractedPath}`);
-        // Ensure the URL starts with https://
+  if (buttonMatch && buttonMatch[1]) {
+    const extractedPath = buttonMatch[1];
+    console.log(`Found button download link in HTML: ${extractedPath}`);
+    // Ensure the URL starts with https://
+    return extractedPath.startsWith('//') ? `https:${extractedPath}` : extractedPath;
+  }
+
+  // Fallback 1: Look for location.href assignment directly in script tags
+  const scriptRegex = /location\.href\s*=\s*['"]([^'"]+\.(?:pdf|zip))(?:\?download=true)?['"]/i;
+  const scriptMatch = html.match(scriptRegex);
+    if (scriptMatch && scriptMatch[1]) {
+        const extractedPath = scriptMatch[1];
+        console.log(`Found script location.href link in HTML: ${extractedPath}`);
         return extractedPath.startsWith('//') ? `https:${extractedPath}` : extractedPath;
     }
 
-    // Fallback: Look for an <a> tag with href containing .pdf inside specific divs
-    const anchorRegex = /<div id=["']?buttons?["']?.*?<a.*?href=["'](.*?\.pdf(?:[?#].*?)?)["']/is;
-    const anchorMatch = html.match(anchorRegex);
-    if (anchorMatch && anchorMatch[1]) {
-        let extractedHref = anchorMatch[1];
-         console.log(`Found potential anchor link in HTML: ${extractedHref}`);
-         // If it's a relative path (common on Sci-Hub), we need the base URL context, which is hard without knowing the exact mirror structure.
-         // We'll assume absolute URLs starting with // or http for now.
-         if (extractedHref.startsWith('//')) {
-            return `https:${extractedHref}`;
-         } else if (extractedHref.startsWith('http')) {
-            return extractedHref;
-         } else {
-            console.warn(`Found relative PDF link (${extractedHref}), cannot resolve without base URL.`);
-            // Cannot reliably construct the full URL here without the base domain.
-            return null;
-         }
-    }
 
-    console.log("No direct PDF download link pattern found in the HTML.");
-    return null;
+  // Fallback 2: Look for an <a> tag with href containing .pdf inside specific divs
+  const anchorRegex = /<div id=["']?buttons?["']?.*?<a.*?href=["'](.*?\.pdf(?:[?#].*?)?)["']/is;
+  const anchorMatch = html.match(anchorRegex);
+  if (anchorMatch && anchorMatch[1]) {
+    let extractedHref = anchorMatch[1];
+    console.log(`Found anchor link in HTML: ${extractedHref}`);
+    // If it's a relative path (common on Sci-Hub), we need the base URL context, which is hard without knowing the exact mirror structure.
+    // We'll assume absolute URLs starting with // or http for now.
+    if (extractedHref.startsWith('//')) {
+      return `https:${extractedHref}`;
+    } else if (extractedHref.startsWith('http')) {
+      return extractedHref;
+    } else {
+      console.warn(`Found relative PDF link (${extractedHref}), cannot resolve without base URL.`);
+      return null;
+    }
+  }
+  console.log("No direct PDF download link pattern found in the HTML.");
+  return null;
 }
 
 
@@ -136,7 +143,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
     const validation = SciHubInputSchema.safeParse(input);
     if (!validation.success) {
         return { success: false, errorMessage: `Invalid input: ${validation.error.message}` };
-    }
+  }
 
     const { doi } = validation.data;
     const sciHubDomains = ['sci-hub.se', 'sci-hub.st', 'sci-hub.ru', 'sci-hub.red'];
@@ -152,8 +159,8 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
         let currentUrl = initialSciHubUrl; // URL being requested
 
         try {
-            console.log(`Step 1: Initial request for DOI: ${doi} from ${currentUrl}`);
-
+            console.log(`Attempting download from Sci-Hub domain: ${domain} for DOI: ${doi}`);
+            currentUrl = `https://${domain}/${doi}`
             // Make a GET request, requesting text initially to handle both HTML and potential PDF redirects
             let response: AxiosResponse;
             try {
@@ -167,9 +174,8 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                 continue; // Try next domain
             }
 
-
             // Check status from the initial response
-             if (response.status >= 400) {
+            if (response.status >= 400) {
                  let errorBody = typeof response.data === 'string' ? response.data : '';
                  console.error(`Initial request failed with status ${response.status} for ${currentUrl}`);
                  if (errorBody.toLowerCase().includes('article not found')) {
@@ -181,13 +187,13 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                  }
                   // If we got a 4xx error, it's likely the DOI is the issue, not the mirror
                  if (response.status < 500) {
+                     // Return failure immediately for 4xx errors as it's unlikely other mirrors will work
                      return { success: false, resolvedUrl: currentUrl, errorMessage: lastError.message, contentType: finalContentType };
                  }
                  continue; // Try next domain for server errors (5xx)
-             }
+            }
 
-
-            // === Step 2: Check Content-Type and Process ===
+            // === Check Content-Type and Process ===
             if (finalContentType?.includes('application/pdf')) {
                 console.log(`Received direct PDF response for ${doi} from ${currentUrl}. Fetching binary content...`);
                 finalDownloadUrl = currentUrl; // This is the direct download URL
@@ -209,6 +215,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                      continue; // Try next domain for 5xx
                  }
 
+                finalContentType = pdfResponse.headers['content-type']?.split(';')[0]; // Update content type from final download
                 const buffer = pdfResponse.data;
                 if (!buffer || buffer.byteLength === 0) {
                     console.error(`Received empty PDF buffer for ${doi} from ${finalDownloadUrl}`);
@@ -223,12 +230,11 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
             } else if (finalContentType?.includes('html')) {
                  const htmlContent = typeof response.data === 'string' ? response.data : '';
                  console.log(`Received HTML for ${doi} from ${currentUrl}. Attempting to extract PDF link...`);
-                 // console.log(`HTML Body (first 500 chars): ${htmlContent.substring(0, 500)}`); // Optional: log HTML snippet
 
                  const extractedPdfUrl = extractPdfLinkFromHtml(htmlContent);
 
                  if (extractedPdfUrl) {
-                    console.log(`Step 3: Found embedded PDF link: ${extractedPdfUrl}. Fetching PDF content...`);
+                    console.log(`Found embedded PDF link: ${extractedPdfUrl}. Fetching PDF content...`);
                     finalDownloadUrl = extractedPdfUrl; // Update the final URL
 
                      // Fetch the actual PDF content from the extracted URL
@@ -260,11 +266,11 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                      }
 
                      const buffer = pdfResponse.data;
-                     if (!buffer || buffer.byteLength === 0) {
+                      if (!buffer || buffer.byteLength === 0) {
                         console.error(`Received empty PDF buffer for ${doi} from extracted link ${finalDownloadUrl}`);
                         lastError = new Error('Downloaded PDF file is empty.');
                         continue; // Try next domain
-                     }
+                      }
 
                      const base64Pdf = Buffer.from(buffer).toString('base64');
                      const dataUri = `data:application/pdf;base64,${base64Pdf}`;
@@ -275,12 +281,12 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
                      // HTML received, but no recognizable download link found
                      console.warn(`HTML received from ${currentUrl}, but no download link found.`);
                       if (htmlContent.toLowerCase().includes('article not found')) {
-                         lastError = new Error('Article not found on Sci-Hub (HTML response).');
-                     } else if (htmlContent.toLowerCase().includes('captcha')) {
+                        lastError = new Error('Article not found on Sci-Hub.');
+                      } else if (htmlContent.toLowerCase().includes('captcha')) {
                         lastError = new Error('Sci-Hub requires CAPTCHA.');
-                     } else {
-                        lastError = new Error('There may be an issue loading the page, as it was unable to find a download link.');
-                     }
+                      } else {
+                        lastError = new Error('HTML received, but could not find download link.');
+                      }
                      // Treat as final failure for this DOI if no link found in HTML
                      return { success: false, resolvedUrl: currentUrl, errorMessage: lastError.message, contentType: finalContentType };
                  }
@@ -331,8 +337,8 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
     console.error(`All attempts failed for DOI ${doi}. Last error:`, lastError?.message || lastError);
     let errorMessage = 'Failed to download from all Sci-Hub mirrors.';
     if (lastError instanceof Error) {
-        errorMessage = lastError.message;
-        // Consolidate common error messages
+      errorMessage = lastError.message;
+      // Consolidate common error messages
         if (errorMessage.toLowerCase().includes('article not found')) {
              errorMessage = 'Article not found on Sci-Hub.';
         } else if (errorMessage.toLowerCase().includes('captcha')) {
@@ -345,7 +351,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
             errorMessage = 'Article not found on Sci-Hub (404).';
         } else if (errorMessage.includes('status')) {
             // Keep specific status errors if not already handled
-        } else if (!errorMessage.startsWith('There may be an issue loading the page') && !errorMessage.startsWith('Extracted link did not provide')) {
+        } else if (!errorMessage.startsWith('HTML received, but could not find download link') && !errorMessage.startsWith('Extracted link did not provide')) {
              // Avoid overly generic message if a more specific HTML/content type error occurred
              errorMessage = `An unexpected error occurred: ${errorMessage}`;
         }
@@ -353,6 +359,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
         errorMessage = lastError;
     }
 
-    // Return the last URL attempted for download if available, otherwise the initial requested URL
-    return { success: false, resolvedUrl: finalDownloadUrl || sciHubDomains.map(d => `https://${d}/${doi}`)[0], errorMessage, contentType: finalContentType };
+  // Return the last URL attempted for download if available, otherwise the first tried URL
+  const firstAttemptUrl = `https://${sciHubDomains[0]}/${doi}`;
+  return { success: false, resolvedUrl: finalDownloadUrl || currentUrl || firstAttemptUrl, errorMessage, contentType: finalContentType };
 }
