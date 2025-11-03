@@ -146,7 +146,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
   }
 
     const { doi } = validation.data;
-    const sciHubDomains = ['sci-hub.se', 'sci-hub.st', 'sci-hub.ru', 'sci-hub.red'];
+    const sciHubDomains = ['sci-hub.se', 'sci-hub.st', 'sci-hub.ru', 'sci-hub.red', 'sci-hub.in'];
     let lastError: any = new Error('Failed to connect to any Sci-Hub mirror.');
     let finalDownloadUrl: string | undefined = undefined; // Track the URL used for the actual PDF download
     let finalContentType: string | undefined = undefined;
