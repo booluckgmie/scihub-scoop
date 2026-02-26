@@ -21,7 +21,7 @@ import { useToast } from '@/hooks/use-toast';
 import { downloadSciHubPdf, type SciHubOutput, type SciHubInput } from '@/lib/sci-hub-downloader';
 import { Progress } from '@/components/ui/progress';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { CheckCircle, AlertTriangle, Download, Loader2, FileWarning, ExternalLink, Info, Package } from 'lucide-react';
+import { AlertTriangle, Download, Loader2, FileWarning, ExternalLink, Info, Package } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import {
   Tooltip,
@@ -30,15 +30,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import JSZip from 'jszip';
-import { dataUriToBlob } from '@/lib/utils'; // Import the helper function
-
-// Polyfill fetch if running in a Node.js environment where it might not be global
-// Although 'node-fetch-native' aims to solve this, explicit checks can be helpful.
-if (typeof fetch === 'undefined') {
-  // console.warn("Global fetch is undefined. Ensure Node version supports fetch or node-fetch-native is polyfilling.");
-    // Commented out as we are now using axios which handles its own dependencies
-}
-
+import { dataUriToBlob } from '@/lib/utils';
 
 const formSchema = z.object({
   dois: z.string().min(1, 'Please enter at least one DOI URL.'),
@@ -261,8 +253,6 @@ export default function Home() {
          setProgress(0); // Reset progress on major error
     } finally {
         setIsLoading(false);
-        // Optionally keep progress at 100 or reset after a delay
-        // setTimeout(() => setProgress(0), 5000);
     }
   };
 

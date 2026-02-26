@@ -12,9 +12,6 @@
  */
 import { z } from 'zod';
 import axios, { AxiosRequestConfig, AxiosResponse, ResponseType } from 'axios';
-import { SocksProxyAgent } from 'socks-proxy-agent';
-import { HttpsProxyAgent } from 'https-proxy-agent'; // For potential HTTPS proxy support
-import * as https from 'https';
 
 // Define input schema using Zod
 const SciHubInputSchema = z.object({
@@ -32,30 +29,6 @@ const SciHubOutputSchema = z.object({
 });
 export type SciHubOutput = z.infer<typeof SciHubOutputSchema>
 
-// --- Proxy Configuration ---
-const USE_PROXY = false; // Set to true to enable proxy
-const proxyUrl = 'socks5://127.0.0.1:7890'; // Your proxy address (SOCKS5 in this case)
-// --- End Proxy Configuration ---
-
-const getAxiosAgent = (): https.Agent | undefined => {
-  if (!USE_PROXY) return undefined;
-  try {
-    if (proxyUrl.startsWith('socks')) {
-      console.log(`Using SOCKS proxy agent: ${proxyUrl}`);
-      return new SocksProxyAgent(proxyUrl);
-    } else if (proxyUrl.startsWith('http')) {
-      console.log(`Using HTTPS proxy agent: ${proxyUrl}`);
-      // Axios needs HttpsProxyAgent for http/https proxies when making HTTPS requests
-      return new HttpsProxyAgent(proxyUrl);
-    } else {
-      console.warn(`Unsupported proxy protocol in URL: ${proxyUrl}`);
-      return undefined;
-    }
-  } catch (e) {
-    console.error("Failed to create proxy agent:", e);
-    return undefined;
-  }
-};
 
 const commonHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
@@ -65,22 +38,15 @@ const commonHeaders = {
 };
 
 const getAxiosConfig = (responseType: ResponseType = 'text'): AxiosRequestConfig => {
-    const agent = getAxiosAgent();
-    const config: AxiosRequestConfig = {
+    return {
         headers: commonHeaders,
         timeout: 90000, // 90 seconds timeout
         maxRedirects: 10, // Follow redirects (axios default is 5)
         responseType: responseType,
-         // Validate status to handle non-2xx responses without throwing immediately
         validateStatus: (status) => {
           return status >= 200 && status < 500; // Accept 2xx, 3xx, 4xx
         }
     };
-    if (agent) {
-        config.httpsAgent = agent;
-        // config.httpAgent = agent; // Uncomment if you need proxy for HTTP too
-    }
-    return config;
 };
 
 /**
@@ -152,7 +118,7 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
     let finalContentType: string | undefined = undefined;
 
 
-    console.log(`Starting download process for DOI: ${doi} ${USE_PROXY ? `via proxy ${proxyUrl}` : ''}`);
+    console.log(`Starting download process for DOI: ${doi}`);
 
     for (const domain of sciHubDomains) {
         const initialSciHubUrl = `https://${domain}/${doi}`;
@@ -160,7 +126,6 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
 
         try {
             console.log(`Attempting download from Sci-Hub domain: ${domain} for DOI: ${doi}`);
-            currentUrl = `https://${domain}/${doi}`
             // Make a GET request, requesting text initially to handle both HTML and potential PDF redirects
             let response: AxiosResponse;
             try {
@@ -361,5 +326,5 @@ export async function downloadSciHubPdf(input: SciHubInput): Promise<SciHubOutpu
 
   // Return the last URL attempted for download if available, otherwise the first tried URL
   const firstAttemptUrl = `https://${sciHubDomains[0]}/${doi}`;
-  return { success: false, resolvedUrl: finalDownloadUrl || currentUrl || firstAttemptUrl, errorMessage, contentType: finalContentType };
+  return { success: false, resolvedUrl: finalDownloadUrl || firstAttemptUrl, errorMessage, contentType: finalContentType };
 }
